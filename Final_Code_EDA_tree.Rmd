@@ -1,0 +1,533 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+Load Data
+
+```{r}
+
+#install.packages('tidytext')
+library(stringr)
+library(wordcloud)
+library(dplyr)
+library(sentimentr)
+library(tidytext)
+library(tm)
+
+cuisine_data = read.csv("cuisine_final_data.csv")
+
+```
+
+Data Cleaning
+
+```{r}
+# Lower text data
+cuisine_data = cuisine_data %>%
+  mutate(text = tolower(text),
+         categories = tolower(categories))
+
+```
+
+Word Cloud to understand what factors matter to the reviewers
+
+```{r}
+# Filtering the top 6 cuisines from data for Word Cloud
+# use str_detect code from below instead of grepl when running this next time
+
+keywords = c("chinese", "japanese", "thai", "korean", "indian", "french")
+international_cuisine_data = cuisine_data[str_detect(cuisine_data$categories, paste(keywords, collapse = "|")), ]
+
+international_cuisine_data[1:5,]
+
+#write.csv(international_cuisine_data, "international_cuisine_data.csv")
+```
+
+```{r}
+#install.packages('stringr')
+library(stringr)
+final=read.csv("international_cuisine_data.csv")
+french = final[str_detect(final$categories, fixed("french")), ]
+japan = final[str_detect(final$categories, fixed("japanese")), ]
+chinese = final[str_detect(final$categories, fixed("chinese")), ]
+india = final[str_detect(final$categories, fixed("india")), ]
+thai = final[str_detect(final$categories, fixed("thai")), ]
+korean = final[str_detect(final$categories, fixed("korean")), ]
+
+
+french$cuisine = 'french'
+japan$cuisine = 'japanese'
+chinese$cuisine = 'chinese'
+india$cuisine = 'india'
+thai$cuisine = 'thai'
+korean$cuisine = 'korean'
+
+final_cui = rbind(french, japan, chinese, india, thai, korean)
+```
+
+# Exploratory Data Analysis
+
+# average number of reviews per business is around 500
+
+```{r}
+mean(final$review_count)
+```
+
+# The distribution of the ratings
+
+```{r}
+#install.packages('ggplot2')
+library(ggplot2)
+ggplot(final, aes(x=review_rating))+
+  geom_bar(stat="bin", bins= 9, fill="violetred4") + 
+  geom_text(stat='count', aes(label=..count..), vjust=1.6, color="white") +
+  ggtitle("Rating Counts") +
+  xlab("Rating") + ylab("Count") +
+  theme_minimal()
+```
+
+## Summary: We observe that reviews with five stars are the most common and that one stars are more prevalent than those with two stars. Customers are only likely to go to the trouble of submitting a review if they were really pleased or extremely dissatisfied.
+
+# EDA of ratings count across cuisines
+
+```{r}
+#install.packages('dplyr')
+library(dplyr)
+library(ggplot2)
+final_count = final_cui |>
+  group_by(cuisine, review_rating) |>
+  mutate(count = n())
+
+ggplot(final_count, aes(x = review_rating)) +
+  #geom_bar(stat = 'identity') +
+  geom_bar(stat="bin", bins= 9, fill="violetred4") + 
+  #geom_text(stat='count', aes(label=..count..), vjust=0.6, color="white") +
+  ggtitle("Rating Counts across Cuisines") +
+  xlab("Rating") + ylab("Count") +
+  theme_minimal() +
+  facet_wrap(~cuisine)
+```
+
+##French is the only cuisine that has less 1 star rating than 2 stars.
+
+# EDA of reviews count across cuisines.
+
+```{r}
+final_review_count = final_cui |>
+  group_by(cuisine,business_id) |>
+  mutate(total_reviews = sum(review_count))
+
+ggplot(final_review_count, aes(x = cuisine, y = total_reviews, fill = cuisine)) +
+  geom_bar(stat = 'identity') +
+  ggtitle("Reviews Counts across Cuisines") +
+  xlab("Cuisine") + ylab("Count") +
+  theme_minimal()
+```
+
+```{r}
+# Analysis using bigrams
+international_cuisine_data %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  inner_join(get_sentiments("bing"), by = c("bigram" = "word")) %>%
+  group_by(text) %>%
+  summarize(sentiment = sum(sentiment))
+
+
+# Word cloud for top cuisines
+library(wordcloud); library(tidytext)
+wordcloudData = 
+  international_cuisine_data %>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  ungroup()%>%
+  select(business_id,word)%>%
+  anti_join(rbind(stop_words,c('restaurant','SMART'),c('food','SMART'),c('sushi','SMART'),c('ramen','SMART'),
+                  c('roll','SMART'),c('chicken','SMART'), c('noodles','SMART'), c('chinese','SMART'), 
+                  c('tuna','SMART'), c('sauce','SMART'), c('bowl','SMART'), c('rice','SMART'), c('rolls','SMART'),
+                  c('miso','SMART'), c('salmon','SMART'), c('beef','SMART'), c('broth','SMART'), c('hibachi','SMART'),
+                  c('salad','SMART'), c('fish','SMART'), c('soup','SMART'), c('japanese','SMART'), c('meat','SMART'),
+                  c('shrimp','SMART'), c('lunch','SMART'), c('sashimi','SMART'), c('asian','SMART'), c('thai','SMART'),
+                  c('korean','SMART'), c('french','SMART'), c('crab','SMART'), c('indian','SMART'), c('tempura','SMART'),
+                  c('pork','SMART'), c('tea','SMART'), c('coffee','SMART')),
+            by = 'word') %>%
+  group_by(word)%>%
+  summarize(freq = n())%>%
+  arrange(desc(freq))%>%
+  ungroup()%>%
+  data.frame()
+
+set.seed(617)
+wordcloud(words = wordcloudData$word,wordcloudData$freq,scale=c(2,0.5),max.words = 100,colors=brewer.pal(8,"Set1"))
+
+#Insights: Service most important, then time, pretty, experience, nice, friendly, amazing, staff, love
+```
+
+```{r}
+chinese_cuisine_cat = cuisine_data[str_detect(cuisine_data$categories, fixed("chinese")), ]
+
+# afinn over_all average score
+chi_cat_mean = chinese_cuisine_cat %>%
+  select(business_id, text)%>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  inner_join(get_sentiments('afinn'))%>%
+  summarize(reviewSentiment = mean(value))%>%  # score for each review
+  ungroup()%>%
+  summarize(mean=mean(reviewSentiment)) # overall average score
+
+japanese_cuisine_cat = cuisine_data[str_detect(cuisine_data$categories, fixed("japanese")), ]
+
+# afinn over_all average score
+jap_cat_mean = japanese_cuisine_cat %>%
+  select(business_id, text)%>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  inner_join(get_sentiments('afinn'))%>%
+  summarize(reviewSentiment = mean(value))%>%  # score for each review
+  ungroup()%>%
+  summarize(mean=mean(reviewSentiment)) # overall average score
+
+indian_cuisine_cat = cuisine_data[str_detect(cuisine_data$categories, fixed("indian")), ]
+
+# afinn over_all average score
+ind_cat_mean = indian_cuisine_cat %>%
+  select(business_id, text)%>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  inner_join(get_sentiments('afinn'))%>%
+  summarize(reviewSentiment = mean(value))%>%  # score for each review
+  ungroup()%>%
+  summarize(mean=mean(reviewSentiment)) # overall average score
+
+thai_cuisine_cat = cuisine_data[str_detect(cuisine_data$categories, fixed("thai")), ]
+
+# afinn over_all average score
+tha_cat_mean = thai_cuisine_cat %>%
+  select(business_id, text)%>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  inner_join(get_sentiments('afinn'))%>%
+  summarize(reviewSentiment = mean(value))%>%  # score for each review
+  ungroup()%>%
+  summarize(mean=mean(reviewSentiment)) # overall average score
+
+korean_cuisine_cat = cuisine_data[str_detect(cuisine_data$categories, fixed("korean")), ]
+
+# afinn over_all average score
+kor_cat_mean = korean_cuisine_cat %>%
+  select(business_id, text)%>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  inner_join(get_sentiments('afinn'))%>%
+  summarize(reviewSentiment = mean(value))%>%  # score for each review
+  ungroup()%>%
+  summarize(mean=mean(reviewSentiment)) # overall average score
+
+
+french_cuisine_cat = cuisine_data[str_detect(cuisine_data$categories, fixed("french")), ]
+
+# afinn over_all average score
+fre_cat_mean = french_cuisine_cat %>%
+  select(business_id, text)%>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  inner_join(get_sentiments('afinn'))%>%
+  summarize(reviewSentiment = mean(value))%>%  # score for each review
+  ungroup()%>%
+  summarize(mean=mean(reviewSentiment)) # overall average score
+```
+
+
+```{r}
+# Dataframe of average afinn scores
+
+cuisines = c("Chinese", "French", "Japanese", "Korean", "Indian", "Thai")
+average_afinn_scores = c(chi_cat_mean$mean, fre_cat_mean$mean, jap_cat_mean$mean, kor_cat_mean$mean, ind_cat_mean$mean, tha_cat_mean$mean)
+
+average_ratings = c(mean(chinese_cuisine_cat$review_rating),
+                    mean(french_cuisine_cat$review_rating),
+                    mean(japanese_cuisine_cat$review_rating),
+                    mean(korean_cuisine_cat$review_rating),
+                    mean(indian_cuisine_cat$review_rating),
+                    mean(thai_cuisine_cat$review_rating))
+
+int_cuisine_scores = data.frame(cuisines, average_afinn_scores, average_ratings)
+int_cuisine_scores
+
+```
+
+Cuisine-wise word cloud for improvement
+
+```{r}
+library(tidyr); library(wordcloud)
+wordcloud_chinese = 
+  chinese_cuisine_cat %>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  ungroup()%>%
+  select(business_id, word)%>%
+  anti_join(stop_words, by = 'word') %>%
+  inner_join(get_sentiments('bing'),by='word')%>%
+  count(sentiment,word,sort=T)%>%
+  ungroup()%>%
+  spread(key = sentiment,value = 'n',fill = 0)
+
+wordcloud_chinese= as.data.frame(wordcloud_chinese)
+rownames(wordcloud_chinese) = wordcloud_chinese[, 'word']
+wordcloud_chinese = wordcloud_chinese[,c('positive','negative')]
+comparison.cloud(wordcloud_chinese, scale=c(2,0.5),max.words = 100,rot.per = 0)
+
+
+# set.seed(617)
+# wordcloud(words = wordcloud_chinese$word, wordcloud_chinese$freq,scale=c(2,0.5),max.words = 50, colors=brewer.pal(8,"Set1"))
+
+```
+
+```{r}
+wordcloud_japanese = 
+  japanese_cuisine_cat %>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  ungroup()%>%
+  select(business_id, word)%>%
+  anti_join(stop_words, by = 'word') %>%
+  inner_join(get_sentiments('bing'),by='word')%>%
+  count(sentiment,word,sort=T)%>%
+  ungroup()%>%
+  spread(key = sentiment,value = 'n',fill = 0)
+
+wordcloud_japanese= as.data.frame(wordcloud_japanese)
+rownames(wordcloud_japanese) = wordcloud_japanese[, 'word']
+wordcloud_japanese = wordcloud_japanese[,c('positive','negative')]
+comparison.cloud(wordcloud_japanese, scale=c(2,0.5),max.words = 100,rot.per = 0)
+```
+
+```{r}
+wordcloud_thai = 
+  thai_cuisine_cat %>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  ungroup()%>%
+  select(business_id, word)%>%
+  anti_join(stop_words, by = 'word') %>%
+  inner_join(get_sentiments('bing'),by='word')%>%
+  count(sentiment,word,sort=T)%>%
+  ungroup()%>%
+  spread(key = sentiment,value = 'n',fill = 0)
+
+wordcloud_thai= as.data.frame(wordcloud_thai)
+rownames(wordcloud_thai) = wordcloud_thai[, 'word']
+wordcloud_thai = wordcloud_thai[,c('positive','negative')]
+comparison.cloud(wordcloud_thai, scale=c(2,0.5),max.words = 100,rot.per = 0)
+
+```
+
+```{r}
+wordcloud_korean = 
+  korean_cuisine_cat %>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  ungroup()%>%
+  select(business_id, word)%>%
+  anti_join(stop_words, by = 'word') %>%
+  inner_join(get_sentiments('bing'),by='word')%>%
+  count(sentiment,word,sort=T)%>%
+  ungroup()%>%
+  spread(key = sentiment,value = 'n',fill = 0)
+
+wordcloud_korean= as.data.frame(wordcloud_korean)
+rownames(wordcloud_korean) = wordcloud_korean[, 'word']
+wordcloud_korean = wordcloud_korean[,c('positive','negative')]
+comparison.cloud(wordcloud_korean, scale=c(2,0.5),max.words = 100,rot.per = 0)
+```
+
+```{r}
+wordcloud_indian = 
+  indian_cuisine_cat %>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  ungroup()%>%
+  select(business_id, word)%>%
+  anti_join(stop_words, by = 'word') %>%
+  inner_join(get_sentiments('bing'),by='word')%>%
+  count(sentiment,word,sort=T)%>%
+  ungroup()%>%
+  spread(key = sentiment,value = 'n',fill = 0)
+
+wordcloud_indian= as.data.frame(wordcloud_indian)
+rownames(wordcloud_indian) = wordcloud_indian[, 'word']
+wordcloud_indian = wordcloud_indian[,c('positive','negative')]
+comparison.cloud(wordcloud_indian, scale=c(2,0.5),max.words = 100,rot.per = 0)
+```
+
+```{r}
+wordcloud_french = 
+  french_cuisine_cat %>%
+  group_by(business_id)%>%
+  unnest_tokens(output=word,input=text)%>%
+  ungroup()%>%
+  select(business_id, word)%>%
+  anti_join(stop_words, by = 'word') %>%
+  inner_join(get_sentiments('bing'),by='word')%>%
+  count(sentiment,word,sort=T)%>%
+  ungroup()%>%
+  spread(key = sentiment,value = 'n',fill = 0)
+
+wordcloud_french= as.data.frame(wordcloud_french)
+rownames(wordcloud_french) = wordcloud_french[, 'word']
+wordcloud_french = wordcloud_french[,c('positive','negative')]
+comparison.cloud(wordcloud_french, scale=c(2,0.5),max.words = 100,rot.per = 0)
+```
+
+
+```{r}
+french_neg = wordcloud_french %>% arrange(desc(negative)) 
+french_neg = list(row.names(french_neg)[0:5])
+french_pos = wordcloud_french %>% arrange(desc(positive)) 
+french_pos = list(row.names(french_pos)[0:5])
+
+indian_neg = wordcloud_indian %>% arrange(desc(negative)) 
+indian_neg = list(row.names(indian_neg)[0:5])
+indian_pos = wordcloud_indian %>% arrange(desc(positive)) 
+indian_pos = list(row.names(indian_pos)[0:5])
+
+japanese_neg = wordcloud_japanese %>% arrange(desc(negative)) 
+japanese_neg = list(row.names(japanese_neg)[0:5])
+japanese_pos = wordcloud_japanese %>% arrange(desc(positive)) 
+japanese_pos = list(row.names(japanese_pos)[0:5])
+
+korean_neg = wordcloud_korean %>% arrange(desc(negative)) 
+korean_neg = list(row.names(korean_neg)[0:5])
+korean_pos = wordcloud_korean %>% arrange(desc(positive)) 
+korean_pos = list(row.names(korean_pos)[0:5])
+
+thai_neg = wordcloud_thai %>% arrange(desc(negative)) 
+thai_neg = list(row.names(thai_neg)[0:5])
+thai_pos = wordcloud_thai %>% arrange(desc(positive)) 
+thai_pos = list(row.names(thai_pos)[0:5])
+
+chinese_neg = wordcloud_chinese %>% arrange(desc(negative)) 
+chinese_neg = list(row.names(chinese_neg)[0:5])
+chinese_pos = wordcloud_chinese %>% arrange(desc(positive)) 
+chinese_pos = list(row.names(chinese_pos)[0:5])
+```
+
+```{r}
+frech1 = as.data.frame(french_pos)
+thai1 = as.data.frame(thai_pos)
+india1 = as.data.frame(indian_pos)
+korean1 = as.data.frame(korean_pos)
+japan1 = as.data.frame(japanese_pos)
+chinese1 = as.data.frame(chinese_pos)
+
+all = cbind(frech = frech1,thai = thai1,india = india1,korea = korean1, japanese = japan1,chinese = chinese1)
+
+names(all) = cuisines
+
+all_trans = as.data.frame(t(all))
+all_trans
+```
+
+```{r}
+frech1 = as.data.frame(french_neg)
+thai1 = as.data.frame(thai_neg)
+india1 = as.data.frame(indian_neg)
+korean1 = as.data.frame(korean_neg)
+japan1 = as.data.frame(japanese_neg)
+chinese1 = as.data.frame(chinese_pos)
+
+all = cbind(frech = frech1,thai = thai1,india = india1,korea = korean1, japanese = japan1,chinese = chinese1)
+
+names(all) = cuisines
+
+all_trans = as.data.frame(t(all))
+all_trans
+```
+
+
+
+It would make sense to relate favorable evaluations with 4- and 5-star ratings, while bad ones with 1- and 2-star ratings.
+
+For simplicity's sake, we will just try to anticipate the positive and negative mood; neutral will be discussed later. Three stars would be neutral. This is so that we can teach a model to distinguish between good and bad language, which 3-star ratings are likely to do. With regard to reviews, neutral sentiment does not mean that we are not utilizing any terms that have an emotional connotation. Instead, customers who give a 3-star review are more likely to have liked some features than not. Because of this, I think adding a "neutral" category is likely to have an impact on the precision of our model and would prefer to go without it for the time being.
+
+# Look specific to one restaurant in French
+
+```{r}
+french |>
+  arrange(desc(review_count))
+
+# biz id = _C7QiQQc47AOEv4PE3Kong
+```
+
+```{r}
+one_business <- french[which(french$business_id=='_C7QiQQc47AOEv4PE3Kong'),]
+one_business_copy = french
+one_business = subset(one_business, review_rating !=3)
+one_business$positive = as.factor(one_business$review_rating > 3)
+```
+
+```{r}
+#install.packages('tm')
+#install.packages('tidytext')
+#install.packages('SnowballC')
+library(tm)
+corpus_french = Corpus(VectorSource(one_business$text))
+
+library(dplyr);library(tidytext);library(SnowballC)
+corpus_french = 
+  corpus_french%>%
+  tm_map(content_transformer(tolower))%>%
+  tm_map(removePunctuation)%>%
+  tm_map(removeWords, c(stopwords('english'))) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(stemDocument)
+
+dictfrench = findFreqTerms(DocumentTermMatrix(Corpus(VectorSource(one_business$text))),lowfreq = 0)
+dict_corpus_french = Corpus(VectorSource(dictfrench))
+
+
+dtm_tfidffrench = DocumentTermMatrix(x=corpus_french,control = list(weighting=function(x) weightTfIdf(x,normalize=F)))
+xdtm_tfidffrench = removeSparseTerms(dtm_tfidffrench,sparse = 0.95)
+xdtm_tfidffrench = as.data.frame(as.matrix(xdtm_tfidffrench))
+colnames(xdtm_tfidffrench) = stemCompletion(x = colnames(xdtm_tfidffrench),dictionary = dict_corpus_french,type='prevalent')
+colnames(xdtm_tfidffrench) = make.names(colnames(xdtm_tfidffrench))
+
+xdtm_tfidffrench$positive=one_business$positive
+
+names(xdtm_tfidffrench)
+```
+
+```{r}
+keeps <- c('atmosphere', 'chef' ,'cocktail', 'command' ,'course','dessert', 'friend','nola', 'order', 'palace' ,'price','time', 'wait',
+           'wine', 'crab','night', 'servant','soup'  ,'turtle', 'garden', 'ask', 'special','recommend','server','crust','dinner',
+           'strawberries','manicures.', 'care', 'fish','pecan', 'service', 'staff' ,'treat','bread','gulf', 'gumbo','light', 'birthday',
+           'soufflé','side', 'pud','brunch', 'cook','cream', 'creol','egg', 'garlic','fresh','kitchen', 'lunch','plate','salad',
+           'sauce','sunday','sweet','table','jazz','live', 'shrimp','impeccable', 'appetiser','waiter', 'seat','martini',
+           'code','dress','cities', 'flavor','southern','water', 'stuff', 'whiskey','present','shortcake','pork', 'positive')
+
+palace = xdtm_tfidffrench[keeps]
+
+set.seed(617)
+splitfrench = sample(1:nrow(palace),size = 0.7*nrow(palace))
+trainfrench = palace[splitfrench,]
+testfrench = palace[-splitfrench,]
+
+
+library(rpart); library(rpart.plot)
+#install.packages('rpart.plot')
+tree_french = rpart(positive~.,trainfrench, method = 'class')
+prp(tree_french)
+```
+
+```{r}
+install.packages('caret')
+library(caret)
+numFolds=trainControl(method = "cv", number = 10)
+cpGrid = expand.grid(.cp=seq(0.001, 0.01, 0.001))
+train(positive ~ ., data = trainfrench, method = "rpart", trControl = numFolds, tuneGrid = cpGrid)
+```
+
+```{r}
+tree_french_cp = rpart(positive~.,trainfrench, method = 'class', cp = 0.002)
+prp(tree_french_cp)
+```
